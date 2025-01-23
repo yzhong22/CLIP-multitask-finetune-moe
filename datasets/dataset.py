@@ -22,11 +22,17 @@ class MultiLabelDataset(torch.utils.data.Dataset):
         self.args = args
         self.subsets = subsets
         self.split = split
+        self.target_disease = None
 
         df = pd.read_csv(args.metadata_path)
-        self.df = df.loc[(df["dataset"].isin(subsets)) & (df["split"] == split)].reset_index(drop=True)
+        if "chexpert" in subsets[0]:
+            self.target_disease = subsets[0][9:]
+            self.df = df.loc[(df["dataset"] == "chexpert") & (df["split"] == split)].reset_index(drop=True)
+        else:
+            self.df = df.loc[(df["dataset"].isin(subsets)) & (df["split"] == split)].reset_index(drop=True)
+        # self.df = df.loc[(df["dataset"].isin(subsets)) & (df["split"] == split)].reset_index(drop=True)
 
-        self.text_template = "An image of {}"
+        self.text_template = "{} in the image"
         self.modality = self.df.iloc[0]["modality"]
         self.classes, self.class_texts = self._build_classes(self.text_template)
         self.transform = build_transform(args, is_train=(split == "train"))
@@ -44,13 +50,15 @@ class MultiLabelDataset(torch.utils.data.Dataset):
             classes.remove("no findings")
             classes_dict["no findings"] = 0
 
-            class_texts.append([text_template.format(x) for x in ["diseased", "no findings"]])
+            class_texts.append(
+                [text_template.format(x) for x in ["abnormalities are present", "no findings are present"]]
+            )
 
         for cls in classes:
             current_idx = len(classes_dict)
             classes_dict[cls] = current_idx
 
-            class_texts.append([text_template.format(x) for x in [f"no {cls} found", cls]])
+            class_texts.append([text_template.format(x) for x in [f"{cls} is not present", f"{cls} is present"]])
 
         return classes_dict, class_texts
 
@@ -66,6 +74,22 @@ class MultiLabelDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.df)
+
+    def get_class_num(self):
+        num_dict = {k: 0 for k in self.classes.keys()}
+
+        for i in range(len(self.df)):
+            item = self.df.iloc[i]
+            class_raw = item["class"]
+
+            classes = [x.strip() for x in class_raw.split(",")]
+
+            for cls in classes:
+                if cls in self.classes.keys():
+                    num_dict[cls] +=1
+
+        return num_dict
+
 
     def __getitem__(self, index):
         item = self.df.iloc[index]
@@ -93,7 +117,8 @@ class MultiLabelDataset(torch.utils.data.Dataset):
         label = torch.tensor([0] * len(self.classes), dtype=torch.int64)
 
         for cls in classes:
-            label[self.classes[cls]] = 1
+            if cls in self.classes.keys():
+                label[self.classes[cls]] = 1
 
         return {
             "image": img,

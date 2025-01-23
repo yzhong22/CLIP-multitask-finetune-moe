@@ -86,7 +86,7 @@ class AdaptationTrainer(object):
 
         save_model(
             args=self.args,
-            epoch="latest",
+            epoch="final",
             model_without_ddp=self.model,
             optimizer=self.optimizer,
             loss_scaler=self.loss_scaler,

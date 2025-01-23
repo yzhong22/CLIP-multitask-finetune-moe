@@ -17,9 +17,9 @@ from utils.mixup import MixupADDiag
 from utils.util import str2bool, setup_logger, cosine_scheduler, auto_load_model, save_model
 from utils.optim_factory import create_optimizer, NativeScalerWithGradNormCount
 
-from datasets import SingleExpertDataset
+from datasets import SingleExpertDataset, MultiLabelDataset
 from models import build_single_expert_model
-from trainers import SingleExpertTrainer
+from trainers import SingleExpertTrainer, AdaptationTrainer
 
 
 def get_args_parser():
@@ -169,7 +169,7 @@ def get_args_parser():
     parser.add_argument("--auto_resume", type=str2bool, default=True)
     parser.add_argument("--save_ckpt", type=str2bool, default=True)
     parser.add_argument("--save_pred", type=str2bool, default=True)
-    parser.add_argument("--save_ckpt_freq", default=10, type=int)
+    parser.add_argument("--save_ckpt_freq", default=1, type=int)
     parser.add_argument("--save_ckpt_num", default=3, type=int)
 
     parser.add_argument("--start_epoch", default=0, type=int, metavar="N", help="start epoch")
@@ -210,8 +210,10 @@ def main(args):
     np.random.seed(seed)
     cudnn.benchmark = True
 
-    dataset_train = SingleExpertDataset(args, subsets=args.subsets, split="train")
-    dataset_test = SingleExpertDataset(args, subsets=args.subsets, split="test")
+    # dataset_train = SingleExpertDataset(args, subsets=args.subsets, split="train")
+    # dataset_test = SingleExpertDataset(args, subsets=args.subsets, split="test")
+    dataset_train = MultiLabelDataset(args, subsets=args.subsets, split="train")
+    dataset_test = MultiLabelDataset(args, subsets=args.subsets, split="test")
 
     dataset_test.set_classes(dataset_train.classes, dataset_train.class_texts)
 
@@ -279,7 +281,7 @@ def main(args):
     logger.info("Number of training examples = %d" % len(dataset_train))
     logger.info("Number of training training per epoch = %d" % num_training_steps_per_epoch)
 
-    trainer = SingleExpertTrainer(
+    trainer = AdaptationTrainer(
         args=args, logger=logger, model=model, data_loader_train=data_loader_train, data_loader_test=data_loader_test
     )
     trainer.train()

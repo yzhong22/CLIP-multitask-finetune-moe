@@ -12,10 +12,10 @@ TRAIN_DATASETS = [
     "chexpert",
     "lung-pet-ct-dx",
     "CC-CCII",
+    "ssim-covid19",
 ]
 OOD_DATASETS = [
     "mimic-cxr",
-    "ssim-covid19",
 ]
 ZERO_SHOT_DATASETS = ["vinbigdata-cxr"]
 DATASETS = TRAIN_DATASETS + OOD_DATASETS + ZERO_SHOT_DATASETS

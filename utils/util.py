@@ -404,7 +404,7 @@ def save_model(args, epoch, model_without_ddp, optimizer, loss_scaler, model_ema
     checkpoint_paths = [output_dir / ("checkpoint-%s.pth" % epoch_name)]
     for checkpoint_path in checkpoint_paths:
         to_save = {
-            "model": model_without_ddp.state_dict(),
+            "model": {k: v for k, v in model_without_ddp.state_dict().items() if v.requires_grad},
             "optimizer": optimizer.state_dict(),
             "epoch": epoch,
             "scaler": loss_scaler.state_dict(),

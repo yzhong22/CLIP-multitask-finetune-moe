@@ -169,7 +169,7 @@ def get_args_parser():
     parser.add_argument("--auto_resume", type=str2bool, default=True)
     parser.add_argument("--save_ckpt", type=str2bool, default=True)
     parser.add_argument("--save_pred", type=str2bool, default=True)
-    parser.add_argument("--save_ckpt_freq", default=10, type=int)
+    parser.add_argument("--save_ckpt_freq", default=1, type=int)
     parser.add_argument("--save_ckpt_num", default=3, type=int)
 
     parser.add_argument("--start_epoch", default=0, type=int, metavar="N", help="start epoch")
