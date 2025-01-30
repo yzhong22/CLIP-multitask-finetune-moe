@@ -104,29 +104,13 @@ class AdaptationTrainer(object):
         header = "Epoch: [{}]".format(epoch)
         print_freq = 100
 
-        text_features = self.model.text_features
-
         for data_iter_step, data_batch in enumerate(
             metric_logger.log_every(self.data_loader_train, print_freq, header)
         ):
             if data_iter_step % self.args.gradient_accumulation_steps == 0:
                 adjust_learning_rate(self.optimizer, epoch, self.args)
 
-            images = data_batch["image"].to(self.args.device, non_blocking=True)
-            labels = data_batch["label"].to(self.args.device, non_blocking=True)
-
-            labels = torch.stack([1 - labels, labels], dim=-1)
-
-            if self.mixup_fn is not None:
-                images, labels = self.mixup_fn(images, labels)
-
-            if self.args.use_amp:
-                with torch.cuda.amp.autocast():
-                    output = self.model(images, text_features, True)["logits"]
-                    loss = self.criterion(output, labels)
-            else:
-                output = self.model(images, text_features, True)["logits"]
-                loss = self.criterion(output, labels)
+            loss = self.cal_loss(data_batch)
 
             loss_value = loss.item()
 
@@ -147,6 +131,7 @@ class AdaptationTrainer(object):
                 )
                 if (data_iter_step + 1) % self.args.gradient_accumulation_steps == 0:
                     self.optimizer.zero_grad()
+                    self._hook_after_update()
             else:
                 loss /= self.args.gradient_accumulation_steps
                 loss.backward()
@@ -154,6 +139,9 @@ class AdaptationTrainer(object):
                 if (data_iter_step + 1) % self.args.gradient_accumulation_steps == 0:
                     self.optimizer.step()
                     self.optimizer.zero_grad()
+
+                    self._hook_after_update()
+            # break
 
             torch.cuda.synchronize()
 
@@ -182,6 +170,30 @@ class AdaptationTrainer(object):
         metric_logger.synchronize_between_processes()
 
         return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+    def _hook_after_update(self):
+        pass
+
+    def cal_loss(self, data_batch):
+        text_features = self.model.text_features
+
+        images = data_batch["image"].to(self.args.device, non_blocking=True)
+        labels = data_batch["label"].to(self.args.device, non_blocking=True)
+
+        labels = torch.stack([1 - labels, labels], dim=-1)
+
+        if self.mixup_fn is not None:
+            images, labels = self.mixup_fn(images, labels)
+
+        if self.args.use_amp:
+            with torch.cuda.amp.autocast():
+                output = self.model(images, text_features, True)["logits"]
+                loss = self.criterion(output, labels)
+        else:
+            output = self.model(images, text_features, True)["logits"]
+            loss = self.criterion(output, labels)
+
+        return loss
 
     @torch.no_grad()
     def evaluate(self, data_loader_val):
@@ -218,7 +230,7 @@ class AdaptationTrainer(object):
         labels_all = np.concatenate(labels_all, axis=0)
 
         report = {}
-        classes = list(self.data_loader_train.dataset.classes.keys())
+        classes = list(data_loader_val.dataset.classes.keys())
         report.update(multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=False))
         report.update(multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=True))
 
@@ -238,14 +250,18 @@ class AdaptationTrainer(object):
                 os.path.join(self.args.output_dir, "pred_latest.npz"),
                 logits=logits_all,
                 labels=labels_all,
-                text_features=np.asarray([x.cpu().numpy() for x in text_features], dtype=object),
+                text_features=(
+                    np.asarray([x.cpu().numpy() for x in text_features], dtype=object) if text_features else None
+                ),
             )
             if is_best:
                 np.savez(
                     os.path.join(self.args.output_dir, "pred_best.npz"),
                     logits=logits_all,
                     labels=labels_all,
-                    text_features=np.asarray([x.cpu().numpy() for x in text_features], dtype=object),
+                    text_features=(
+                        np.asarray([x.cpu().numpy() for x in text_features], dtype=object) if text_features else None
+                    ),
                 )
 
         return report, is_best

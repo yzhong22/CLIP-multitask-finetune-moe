@@ -18,8 +18,8 @@ from utils.util import str2bool, setup_logger, cosine_scheduler, auto_load_model
 from utils.optim_factory import create_optimizer, NativeScalerWithGradNormCount
 
 from datasets import SingleExpertDataset, MultiLabelDataset
-from models import AdaptationModel, build_backbone
-from trainers import AdaptationTrainer
+from models import AdaptationModel, build_backbone, build_adaptation_model
+from trainers import build_trainer_func
 
 
 def get_args_parser():
@@ -39,6 +39,11 @@ def get_args_parser():
     parser.add_argument("--input_size", default=224, type=int, help="image input size")
     parser.add_argument("--residual_scale", default=0.1, type=float)
     parser.add_argument("--drop_path", type=float, default=0.0, metavar="PCT", help="Drop path rate (default: 0.1)")
+    parser.add_argument(
+        "--peft",
+        type=str2bool,
+        default=False,
+    )
 
     # Optimization parameters
     parser.add_argument(
@@ -180,12 +185,29 @@ def get_args_parser():
         default=True,
         help="Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.",
     )
+    parser.add_argument("--max_update_per_epoch", type=int, default=10000)
 
     # Evaluation parameters
     parser.add_argument("--crop_pct", type=float, default=None)
     parser.add_argument(
         "--use_amp", type=str2bool, default=False, help="Use apex AMP (Automatic Mixed Precision) or not"
     )
+
+    # R-Adapter parameters
+    parser.add_argument("--r_lora", type=float, default=0)
+    parser.add_argument("--r_adapter", type=float, default=8)
+    parser.add_argument("--r_drop_path", type=float, default=0.2)
+    parser.add_argument("--r_ema", type=float, default=0.999)
+    parser.add_argument("--r_bma", type=float, default=0)
+    parser.add_argument("--r_eval_scale", type=float, default=0.5)
+
+    # CoCoOp parameters
+    parser.add_argument("-cocoop_n_ctx", type=int, default=4)
+    parser.add_argument("-cocoop_ctx_init", type=str, default="")
+
+    # TaskRes parameters
+    parser.add_argument("--taskres_alpha", type=float, default=0.5)
+
     return parser
 
 
@@ -197,6 +219,34 @@ def check_args(args):
     assert all(
         [x in TRAIN_DATASETS for x in subsets]
     ), f"Argument {args.subsets} contains invalid subsets. Supported datasets: {TRAIN_DATASETS}."
+
+
+class LimitedDataLoader:
+    def __init__(self, dataloader, max_iterations):
+        self.dataloader = dataloader
+        self.max_iterations = max_iterations
+
+    def __iter__(self):
+        self.counter = 0  # Initialize counter
+        self.iter_dataloader = iter(self.dataloader)  # Get iterator for the dataloader
+        return self
+
+    def __next__(self):
+        if self.counter < self.max_iterations:
+            self.counter += 1
+            return next(self.iter_dataloader)
+        else:
+            raise StopIteration
+
+    def __len__(self):
+        """
+        Get the maximum number of iterations for this limited DataLoader.
+
+        Returns:
+            int: The minimum of the maximum iterations and the total number of batches
+                 in the original DataLoader.
+        """
+        return min(self.max_iterations, len(self.dataloader))
 
 
 def main(args):
@@ -214,6 +264,8 @@ def main(args):
     dataset_test = MultiLabelDataset(args, subsets=args.subsets, split="test")
 
     dataset_test.set_classes(dataset_train.classes, dataset_train.class_texts)
+
+    args.num_labels = len(dataset_train.class_texts)
 
     logger.info(f"Classes for diagnose: {dataset_train.classes}")
     logger.info(f"Class prompts: {dataset_train.class_texts}")
@@ -239,6 +291,10 @@ def main(args):
             shuffle=True,
         )
 
+    data_loader_train = LimitedDataLoader(
+        data_loader_train, max_iterations=args.max_update_per_epoch * args.gradient_accumulation_steps
+    )
+
     if dataset_test is not None:
         data_loader_test = torch.utils.data.DataLoader(
             dataset_test,
@@ -251,12 +307,12 @@ def main(args):
     else:
         data_loader_test = None
 
-    backbone = build_backbone(args)
-    model = AdaptationModel(backbone=backbone).to(device)
+    model = build_adaptation_model(args).to(device)
     model.init_text_features(dataset_train.class_texts)
 
-    for p in model.backbone.parameters():
-        p.requires_grad = False
+    if not args.peft:
+        for p in model.backbone.parameters():
+            p.requires_grad = False
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     trainable_paramteters = [n for n, p in model.named_parameters() if p.requires_grad]
@@ -280,7 +336,7 @@ def main(args):
     logger.info("Number of training examples = %d" % len(dataset_train))
     logger.info("Number of training training per epoch = %d" % num_training_steps_per_epoch)
 
-    trainer = AdaptationTrainer(
+    trainer = build_trainer_func(args)(
         args=args, logger=logger, model=model, data_loader_train=data_loader_train, data_loader_test=data_loader_test
     )
     trainer.train()

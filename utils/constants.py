@@ -17,7 +17,7 @@ TRAIN_DATASETS = [
 OOD_DATASETS = [
     "mimic-cxr",
 ]
-ZERO_SHOT_DATASETS = ["vinbigdata-cxr"]
+ZERO_SHOT_DATASETS = ["vinbigdata-cxr", "mimic-cxr"]
 DATASETS = TRAIN_DATASETS + OOD_DATASETS + ZERO_SHOT_DATASETS
 
 CLASSES = {

@@ -404,7 +404,7 @@ def save_model(args, epoch, model_without_ddp, optimizer, loss_scaler, model_ema
     checkpoint_paths = [output_dir / ("checkpoint-%s.pth" % epoch_name)]
     for checkpoint_path in checkpoint_paths:
         to_save = {
-            "model": {k: v for k, v in model_without_ddp.state_dict().items() if v.requires_grad},
+            "model": model_without_ddp.state_dict(),
             "optimizer": optimizer.state_dict(),
             "epoch": epoch,
             "scaler": loss_scaler.state_dict(),
@@ -444,7 +444,7 @@ def auto_load_model(args, model_without_ddp, optimizer, loss_scaler, model_ema=N
         else:
             checkpoint = torch.load(args.resume, map_location="cpu")
 
-        model_without_ddp.load_state_dict(checkpoint["model"])
+        model_without_ddp.load_state_dict(checkpoint["model"], strict=False)
         print("Resume checkpoint %s" % args.resume)
         if "optimizer" in checkpoint and "epoch" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer"])

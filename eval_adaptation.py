@@ -115,6 +115,22 @@ def build_model(args, device):
     return model
 
 
+def split_datasets(eval_subsets):
+    id_datasets, ood_datasets, novel_datasets = [], [], []
+
+    for subset in eval_subsets:
+        if subset in TRAIN_DATASETS:
+            id_datasets.append(subset)
+        elif subset in OOD_DATASETS:
+            ood_datasets.append(subset)
+        elif subset in ZERO_SHOT_DATASETS:
+            novel_datasets.append(subset)
+        else:
+            raise NotImplementedError
+
+    return id_datasets, ood_datasets, novel_datasets
+
+
 def main(args):
     logger = setup_logger("history", args.output_dir, "history.log", screen=True, tofile=True)
     logger.info(args)
@@ -133,10 +149,10 @@ def main(args):
         # Multi-label datasets such as CheXpert should follow different evaluation pipelines
         if subset in ["chexpert", "mimic-cxr"]:
             is_multi_label = True
-            dataset = MultiLabelDataset(args, subsets=subset, split="test")
         else:
             is_multi_label = False
-            dataset = SingleExpertDataset(args, subsets=subset, split="test")
+            # dataset = SingleExpertDataset(args, subsets=subset, split="test")
+        dataset = MultiLabelDataset(args, subsets=subset, split="test")
 
         data_loader_val = torch.utils.data.DataLoader(
             dataset,
@@ -152,7 +168,6 @@ def main(args):
 
         if is_multi_label:
             logits_all = []
-
         else:
             logits_ad_all = []
             logits_diag_all = []
@@ -268,7 +283,9 @@ def main(args):
                     labels=labels_all,
                     image_feature_pretrained=feature_pretrained_all,
                     image_feature_residual=feature_residual_all,
-                    text_features=np.asarray([x.cpu().numpy() for x in text_features], dtype=object),
+                    text_features=(
+                        np.asarray([x.cpu().numpy() for x in text_features], dtype=object) if text_features else None
+                    ),
                 )
             else:
                 np.savez(
@@ -278,7 +295,9 @@ def main(args):
                     labels=labels_all,
                     image_feature_pretrained=feature_pretrained_all,
                     image_feature_residual=feature_residual_all,
-                    text_features=np.asarray([x.cpu().numpy() for x in text_features], dtype=object),
+                    text_features=(
+                        np.asarray([x.cpu().numpy() for x in text_features], dtype=object) if text_features else None
+                    ),
                 )
 
 

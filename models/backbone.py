@@ -10,7 +10,6 @@ class Backbone(nn.Module):
         super().__init__(*args, **kwargs)
 
         self.dim = None
-
         self.model = None
         self.image_processor = None
         self.tokenizer = None
