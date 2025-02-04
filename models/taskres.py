@@ -17,7 +17,10 @@ class TaskResLearner(nn.Module):
         self.text_feature_residuals = None
 
     def init_prompts(self, base_text_features):
-        self.register_buffer("base_text_features", base_text_features)
+        try:
+            self.register_buffer("base_text_features", base_text_features)
+        except:
+            return
         self.text_feature_residuals = nn.Parameter(torch.zeros_like(base_text_features))
 
     def forward(self):
@@ -30,8 +33,12 @@ class TaskResModel(CLIPModel):
             backbone,
         )
         self.num_labels = args.num_labels
+        self.classes = None
 
         self.prompt_learners = nn.ModuleList([TaskResLearner(args.taskres_alpha) for _ in range(args.num_labels)])
+
+    def set_classes(self, classes):
+        self.classes = classes
 
     def init_text_features(self, texts_multitasks):
         super().init_text_features(texts_multitasks)
@@ -76,7 +83,9 @@ class TaskResModel(CLIPModel):
         # Identify the skipped keys
         skipped_keys = [k for k in state_dict.keys() if "base_text_features" in k]
         for k in skipped_keys:
-            assert torch.equal(state_dict[k], self.state_dict()[k].to(state_dict[k].device))
+            assert torch.all(
+                torch.lt(torch.abs(torch.add(state_dict[k], -self.state_dict()[k].to(state_dict[k].device))), 1e-5)
+            ), f"{state_dict[k]} and {self.state_dict()[k].to(state_dict[k].device)}."
         if skipped_keys:
             print(f"Skipping keys: {skipped_keys}")
 

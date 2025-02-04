@@ -190,7 +190,7 @@ class RAdapterTrainer(AdaptationTrainer):
         labels_all = np.concatenate(labels_all, axis=0)
 
         report = {}
-        classes = list(self.data_loader_train.dataset.classes.keys())
+        classes = list(data_loader_val.dataset.classes.keys())
         report.update(multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=False))
         report.update(multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=True))
 

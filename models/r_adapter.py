@@ -157,3 +157,40 @@ class RAdapterModel(CLIPModel):
 
             bound_method = forward_vit_block_adapter.__get__(_, _.__class__)
             setattr(_, "forward", bound_method)
+
+    def init_wise_ft(self, args, zero_shot_state_dict, alpha=0.5):
+        from trainers.r_adapter import Rep_AdaptWeight
+
+        Rep_AdaptWeight(self, args)
+
+        theta_0 = {k: v.clone() for k, v in zero_shot_state_dict.items()}
+        theta_1 = {k: v.clone() for k, v in self.state_dict().items()}
+
+        theta = _merge(alpha, theta_0, theta_1, None, 1e-8)
+
+        self.load_state_dict(theta)
+
+
+def _merge(alpha, theta_0, theta_1, fishers, fisher_floor):
+    if fishers is None:
+        # interpolate between all weights in the checkpoints
+        return {key: (1 - alpha) * theta_0[key] + alpha * theta_1[key] for key in theta_0.keys()}
+
+    fisher_0, fisher_1 = fishers
+
+    theta = {}
+    for key in theta_0.keys():
+        # Make sure that either we have a Fisher for this variable for
+        # both checkpoints or none of the checkpoints. Default to regular
+        # interpolation if no Fisher is found.
+        assert (key in fisher_0) == (key in fisher_1)
+        ones = torch.ones_like(theta_0[key])
+        f_0 = torch.maximum(fisher_0.get(key, ones), fisher_floor * ones)
+        f_1 = torch.maximum(fisher_1.get(key, ones), fisher_floor * ones)
+
+        c_0 = (1 - alpha) * f_0
+        c_1 = alpha * f_1
+
+        theta[key] = (c_0 * theta_0[key] + c_1 * theta_1[key]) / (c_0 + c_1)
+
+    return theta

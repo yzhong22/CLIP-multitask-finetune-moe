@@ -13,7 +13,7 @@ import utils.constants as constants
 
 
 class MultiLabelDataset(torch.utils.data.Dataset):
-    def __init__(self, args, subsets, split):
+    def __init__(self, args, subsets, split, augmentation=True):
         super().__init__()
 
         if not type(subsets) is list:
@@ -35,7 +35,7 @@ class MultiLabelDataset(torch.utils.data.Dataset):
         self.text_template = "{} in the image"
         self.modality = self.df.iloc[0]["modality"]
         self.classes, self.class_texts = self._build_classes(self.text_template)
-        self.transform = build_transform(args, is_train=(split == "train"))
+        self.transform = build_transform(args, is_train=((split == "train") & augmentation))
 
     def _build_classes(self, text_template):
         classes = set()
@@ -86,10 +86,9 @@ class MultiLabelDataset(torch.utils.data.Dataset):
 
             for cls in classes:
                 if cls in self.classes.keys():
-                    num_dict[cls] +=1
+                    num_dict[cls] += 1
 
         return num_dict
-
 
     def __getitem__(self, index):
         item = self.df.iloc[index]

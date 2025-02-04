@@ -8,7 +8,8 @@ from models.moe import MoEModel
 from models.r_adapter import RAdapterModel
 from models.cocoop import CoCoOpModel
 from models.taskres import TaskResModel
-
+from models.clap import CLAPModel
+from models.flyp import FLYPModel
 
 backbone_map = {"biomedclip": BiomedCLIP}
 
@@ -36,6 +37,12 @@ def build_adaptation_model(args):
         return CoCoOpModel(backbone, args)
     elif args.method == "taskres":
         return TaskResModel(backbone, args)
+    elif args.method == "clap":
+        return CLAPModel(backbone, args)
+    elif args.method in ["wise-ft", "ft"]:
+        return CLIPModel(backbone)
+    elif args.method == "flyp":
+        return FLYPModel(backbone)
     else:
         raise NotImplementedError
 

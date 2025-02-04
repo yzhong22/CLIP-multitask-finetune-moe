@@ -208,6 +208,9 @@ def get_args_parser():
     # TaskRes parameters
     parser.add_argument("--taskres_alpha", type=float, default=0.5)
 
+    # CLAP parameters
+    parser.add_argument("--clap_constraint", type=str, default="l2")
+
     return parser
 
 
@@ -225,6 +228,7 @@ class LimitedDataLoader:
     def __init__(self, dataloader, max_iterations):
         self.dataloader = dataloader
         self.max_iterations = max_iterations
+        self.dataset = dataloader.dataset
 
     def __iter__(self):
         self.counter = 0  # Initialize counter
@@ -313,6 +317,9 @@ def main(args):
     if not args.peft:
         for p in model.backbone.parameters():
             p.requires_grad = False
+    if args.method in ["ft", "wise-ft", "flyp"]:
+        for p in model.backbone.model.visual.parameters():
+            p.requires_grad = True
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     trainable_paramteters = [n for n, p in model.named_parameters() if p.requires_grad]

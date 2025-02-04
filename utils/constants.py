@@ -14,10 +14,8 @@ TRAIN_DATASETS = [
     "CC-CCII",
     "ssim-covid19",
 ]
-OOD_DATASETS = [
-    "mimic-cxr",
-]
-ZERO_SHOT_DATASETS = ["vinbigdata-cxr", "mimic-cxr"]
+OOD_DATASETS = ["mimic-cxr", "luna16", "covid-ct-md"]
+ZERO_SHOT_DATASETS = ["vinbigdata-cxr"]
 DATASETS = TRAIN_DATASETS + OOD_DATASETS + ZERO_SHOT_DATASETS
 
 CLASSES = {
@@ -62,6 +60,12 @@ CLASSES = {
         # "pneumonia",
         "atelectasis",
         "pneumothorax",
+    ],
+    "luna16": ["no findings"],
+    "covid-ct-md": [
+        "no findings",
+        # "typical appearance pneumonia",
+        "atypical appearance pneumonia",
     ],
     "vinbigdata-cxr": [
         "no findings",

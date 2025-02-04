@@ -20,7 +20,7 @@ from utils.metrics import (
 )
 
 from datasets import MultiLabelDataset, SingleExpertDataset
-from models import build_single_expert_model, build_backbone, CLIPModel, AdaptationModel
+from models import build_single_expert_model, build_backbone, CLIPModel, AdaptationModel, build_adaptation_model
 from tqdm import tqdm
 
 
@@ -67,6 +67,26 @@ def get_args_parser():
     parser.add_argument(
         "--use_amp", type=str2bool, default=False, help="Use apex AMP (Automatic Mixed Precision) or not"
     )
+    parser.add_argument("--eval_expert", type=str2bool, default=False)
+    parser.add_argument("--peft", type=str2bool, default=True)
+
+    # R-Adapter parameters
+    parser.add_argument("--r_lora", type=float, default=0)
+    parser.add_argument("--r_adapter", type=float, default=8)
+    parser.add_argument("--r_drop_path", type=float, default=0.2)
+    parser.add_argument("--r_ema", type=float, default=0.999)
+    parser.add_argument("--r_bma", type=float, default=0)
+    parser.add_argument("--r_eval_scale", type=float, default=0.5)
+
+    # CoCoOp parameters
+    parser.add_argument("-cocoop_n_ctx", type=int, default=4)
+    parser.add_argument("-cocoop_ctx_init", type=str, default="")
+
+    # TaskRes parameters
+    parser.add_argument("--taskres_alpha", type=float, default=0.5)
+
+    # CLAP parameters
+    parser.add_argument("--clap_constraint", type=str, default="l2")
     return parser
 
 
@@ -101,11 +121,39 @@ def build_model(args, device):
         backbone = build_backbone(args)
         model = CLIPModel(backbone=backbone).to(device)
     elif len(args.experts) >= 1:
-        backbone = build_backbone(args)
-        model = AdaptationModel(backbone=backbone)
+        if args.method == "taskres":
+            subsets_train = ["rsna-pulmonary-embolism", "chexpert", "CC-CCII", "ssim-covid19", "lung-pet-ct-dx"]
+
+            dataset_train = MultiLabelDataset(args, subsets=subsets_train, split="train")
+            args.num_labels = len(dataset_train.classes)
+        model = build_adaptation_model(args)
+
+        if args.method == "taskres":
+            model.set_classes(dataset_train.classes)
+            model.init_text_features(dataset_train.class_texts)
         checkpoint = torch.load(args.ckpt_dir, map_location="cpu")
+
         model.load_state_dict(checkpoint["model"])
         model = model.to(device)
+
+        if args.method == "r-adapter":
+            backbone = build_backbone(args)
+            model_org = CLIPModel(backbone=backbone).to(device)
+
+            org_state_dict = model.state_dict()
+
+            model.init_wise_ft(args, org_state_dict, alpha=0.5)
+
+            model_org.load_state_dict(org_state_dict, strict=False)
+
+            return model_org
+
+        elif args.method == "wise-ft":
+            backbone = build_backbone(args)
+            model_org = CLIPModel(backbone=backbone).to(device)
+
+            org_state_dict = model.state_dict()
+            model.init_wise_ft(org_state_dict, alpha=0.5)
 
         # adapter_state_dict = {
         #     k.replace("adapter.", ""): v for k, v in checkpoint["model"].items() if k.startswith("adapter.")
@@ -147,7 +195,7 @@ def main(args):
 
     for i, subset in enumerate(args.eval_subsets):
         # Multi-label datasets such as CheXpert should follow different evaluation pipelines
-        if subset in ["chexpert", "mimic-cxr"]:
+        if subset in ["chexpert", "mimic-cxr", "luna16"] + ZERO_SHOT_DATASETS:
             is_multi_label = True
         else:
             is_multi_label = False
@@ -163,15 +211,15 @@ def main(args):
             shuffle=False,
         )
 
-        model.init_text_features(dataset.class_texts)
+        if args.method == "taskres":
+            class_indices = [model.classes[cls] for cls in dataset.classes.keys()]
+
+            logger.info(f"Using following class indices for method {args.method}: {class_indices}")
+        else:
+            model.init_text_features(dataset.class_texts)
         text_features = model.text_features
 
-        if is_multi_label:
-            logits_all = []
-        else:
-            logits_ad_all = []
-            logits_diag_all = []
-
+        logits_all = []
         labels_all = []
 
         feature_pretrained_all = []
@@ -185,32 +233,17 @@ def main(args):
                 images = batch["image"].to(args.device, non_blocking=True)
                 labels = batch["label"].to(args.device, non_blocking=True)
 
-                if is_multi_label:
-                    if args.use_amp:
-                        with torch.cuda.amp.autocast():
-                            output = model(images, text_features, True)
-                    else:
+                if args.use_amp:
+                    with torch.cuda.amp.autocast():
                         output = model(images, text_features, True)
-                    logits = output["logits"]
-
-                    logits_all.append(logits.detach().cpu().numpy())
                 else:
-                    if args.use_amp:
-                        with torch.cuda.amp.autocast():
-                            output = model(images)
+                    output = model(images, text_features, True)
+                logits = output["logits"]
 
-                            image_feature = output["image_feature"]
-                            logits_ad = model.compute_logits(image_feature, text_features[0])["logits"]
-                            logits_diag = model.compute_logits(image_feature, text_features[1])["logits"]
-                    else:
-                        output = model(images)
+                if args.method == "taskres":
+                    logits = logits[:, class_indices, :]
 
-                        image_feature = output["image_feature"]
-                        logits_ad = model.compute_logits(image_feature, text_features[0])["logits"]
-                        logits_diag = model.compute_logits(image_feature, text_features[1])["logits"]
-
-                    logits_ad_all.append(logits_ad.detach().cpu().numpy())
-                    logits_diag_all.append(logits_diag.detach().cpu().numpy())
+                logits_all.append(logits.detach().cpu().numpy())
 
                 feature_pretrained = output["image_feature_pretrained"]
                 feature_residual = (
@@ -232,38 +265,26 @@ def main(args):
         report = {}
 
         classes = list(data_loader_val.dataset.classes.keys())
-        if is_multi_label:
-            logits_all = np.concatenate(logits_all, axis=0).astype(np.float32)
-            prob_all = torch.softmax(torch.from_numpy(logits_all), dim=-1)[:, :, -1].numpy()
+        logits_all = np.concatenate(logits_all, axis=0).astype(np.float32)
 
-            report.update(
-                multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=False)
-            )
-            report.update(multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=True))
-        else:
-            logits_ad_all = np.concatenate(logits_ad_all, axis=0).astype(np.float32)
-            logits_diag_all = np.concatenate(logits_diag_all, axis=0).astype(np.float32)
+        # prob shape: B, NC
+        prob_all = torch.softmax(torch.from_numpy(logits_all), dim=-1)[:, :, -1].numpy()
 
-            prob_ad_all = torch.softmax(torch.from_numpy(logits_ad_all), dim=-1).numpy()
-            prob_diag_all = torch.softmax(torch.from_numpy(logits_diag_all), dim=-1).numpy()
+        report.update(multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=False))
+        report.update(multitask_binary_classification_report(prob_all, labels_all, classes, threshold_max_f1=True))
 
-            thres_ad_max_f1 = find_threshold(prob_ad_all[:, -1], labels_all[:, 0])
+        if not is_multi_label:
+            # evaluate in the multi-class manner
 
-            report.update(
-                binary_classification_report(
-                    prob_ad_all[:, -1], labels_all[:, 0], threshold=thres_ad_max_f1, suffix="-ad@max_f1"
-                )
-            )
-            report.update({"thres-ad@max_f1": thres_ad_max_f1})
-            report.update(
-                binary_classification_report(prob_ad_all[:, -1], labels_all[:, 0], threshold=0.5, suffix="-ad@0.5")
-            )
+            prob_multi_class = prob_all
+            labels_multi_class = np.argmax(labels_all, axis=-1)
+
             report.update(
                 multitask_classification_report(
-                    prob_diag_all,
-                    labels_all[:, -1],
+                    prob_multi_class,
+                    labels_multi_class,
                     classes=classes,
-                    suffix="-diag",
+                    suffix="-multiclass",
                 )
             )
 
@@ -276,29 +297,16 @@ def main(args):
             json.dump(report, fp, indent=2)
 
         if args.save_pred:
-            if is_multi_label:
-                np.savez(
-                    os.path.join(output_dir, "pred.npz"),
-                    logits=logits_all,
-                    labels=labels_all,
-                    image_feature_pretrained=feature_pretrained_all,
-                    image_feature_residual=feature_residual_all,
-                    text_features=(
-                        np.asarray([x.cpu().numpy() for x in text_features], dtype=object) if text_features else None
-                    ),
-                )
-            else:
-                np.savez(
-                    os.path.join(output_dir, "pred.npz"),
-                    logits_ad=logits_ad_all,
-                    logits_diag=logits_diag_all,
-                    labels=labels_all,
-                    image_feature_pretrained=feature_pretrained_all,
-                    image_feature_residual=feature_residual_all,
-                    text_features=(
-                        np.asarray([x.cpu().numpy() for x in text_features], dtype=object) if text_features else None
-                    ),
-                )
+            np.savez(
+                os.path.join(output_dir, "pred.npz"),
+                logits=logits_all,
+                labels=labels_all,
+                image_feature_pretrained=feature_pretrained_all,
+                image_feature_residual=feature_residual_all,
+                text_features=(
+                    np.asarray([x.cpu().numpy() for x in text_features], dtype=object) if text_features else None
+                ),
+            )
 
 
 if __name__ == "__main__":
@@ -309,10 +317,18 @@ if __name__ == "__main__":
     if args.metadata_path == "":
         args.metadata_path = os.path.join(args.data_root, "metadata.csv")
     if args.experts_str is not None:
-        args.output_dir = os.path.join(args.ckpt_dir, f"train_adaptation_{','.join(args.experts)}", "eval")
-        args.ckpt_dir = os.path.join(
-            args.ckpt_dir, f"train_adaptation_{','.join(args.experts)}", "checkpoint-best.pth"
-        )
+        if args.eval_expert:
+            args.output_dir = os.path.join(args.ckpt_dir, args.method, f"train_{','.join(args.experts)}", "eval")
+            args.ckpt_dir = os.path.join(
+                args.ckpt_dir, args.method, f"train_{','.join(args.experts)}", "checkpoint-final.pth"
+            )
+        else:
+            args.output_dir = os.path.join(
+                args.ckpt_dir, args.method, f"train_adaptation_{','.join(args.experts)}", "eval"
+            )
+            args.ckpt_dir = os.path.join(
+                args.ckpt_dir, args.method, f"train_adaptation_{','.join(args.experts)}", "checkpoint-final.pth"
+            )
     else:
         args.output_dir = os.path.join(args.ckpt_dir, "eval")
 

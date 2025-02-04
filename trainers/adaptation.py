@@ -41,6 +41,8 @@ class AdaptationTrainer(object):
         self.logger.info("Start training for %d epochs" % self.args.epochs)
         start_time = time.time()
 
+        self._hook_before_train()
+
         n_parameters = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
 
         self.max_accuracy = 0.0
@@ -81,8 +83,8 @@ class AdaptationTrainer(object):
                     "epoch": epoch,
                     "n_parameters": n_parameters,
                 }
-
             self.logger.info(log_stats)
+            self._hook_after_epoch()
 
         save_model(
             args=self.args,
@@ -172,6 +174,12 @@ class AdaptationTrainer(object):
         return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
     def _hook_after_update(self):
+        pass
+
+    def _hook_after_epoch(self):
+        pass
+
+    def _hook_before_train(self):
         pass
 
     def cal_loss(self, data_batch):

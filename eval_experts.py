@@ -290,8 +290,10 @@ if __name__ == "__main__":
     if args.metadata_path == "":
         args.metadata_path = os.path.join(args.data_root, "metadata.csv")
     if args.experts_str is not None:
-        args.output_dir = os.path.join(args.ckpt_dir, f"train_{','.join(args.experts)}", "eval")
-        args.ckpt_dir = os.path.join(args.ckpt_dir, f"train_{','.join(args.experts)}", "checkpoint-best.pth")
+        args.output_dir = os.path.join(args.ckpt_dir, args.method, f"train_{','.join(args.experts)}", "eval")
+        args.ckpt_dir = os.path.join(
+            args.ckpt_dir, args.method, f"train_{','.join(args.experts)}", "checkpoint-best.pth"
+        )
     else:
         args.output_dir = os.path.join(args.ckpt_dir, "eval")
 
